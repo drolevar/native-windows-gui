@@ -12,6 +12,7 @@ use crate::ImageList;
 
 #[cfg(feature="image-list")]
 use std::ptr;
+use winapi::um::commctrl::TCM_ADJUSTRECT;
 
 const NOT_BOUND: &'static str = "TabsContainer/Tab is not yet bound to a winapi object";
 const BAD_HANDLE: &'static str = "INTERNAL ERROR: TabsContainer/Tab handle is not HWND!";
@@ -298,23 +299,19 @@ impl TabsContainer {
                         tab_offset_y: 0
                     };
 
-                    // Get the height of the tabs
-                    let font_handle = wh::get_window_font(hwnd);
-                    let mut r: RECT = mem::zeroed();
-                    let dc = GetDC(hwnd);
-                    let old = SelectObject(dc, font_handle as HGDIOBJ);
-                    let calc: [u16;2] = [75, 121];
-                    DrawTextW(dc, calc.as_ptr(), 2, &mut r, DT_CALCRECT | DT_LEFT);
-                    SelectObject(dc, old);
-                    ReleaseDC(hwnd, dc);
+                    // WIP: Attempt to get rid of the padding in the tab child windows
+
+                    // https://stackoverflow.com/questions/21078721/tcm-getitemrect-tcm-adjustrect-to-get-tab-client-area
+
+                    let mut display_rect: RECT = mem::zeroed();
+                    wh::send_message(hwnd, TCM_ADJUSTRECT, false as WPARAM, (&mut display_rect as *mut RECT) as LPARAM);
 
                     // Fix the width/height of the tabs
-                    const BORDER_SIZE: u32 = 11;
-                    let tab_height = r.bottom as u32 + BORDER_SIZE;
-                    if data.width > BORDER_SIZE { data.width -= BORDER_SIZE; }
-                    if data.height > tab_height { 
-                        data.height -= (tab_height + BORDER_SIZE).min(data.height);
+                    let tab_height = display_rect.top as u32;
+                    if data.height > tab_height {
+                        data.height -= tab_height.min(data.height);
                     }
+
                     data.tab_offset_y = tab_height;
                     
                     let data_ptr = &data as *const ResizeDirectChildrenParams;
@@ -592,14 +589,14 @@ impl Tab {
 
         // Resize the tabs so that they match the tab view size and hide all children tabs
         let (w, h) = wh::get_window_size(tab_view_handle);
-        let width = w - 11;
-        let height = h - 33;
+        let width = w;
+        let height = h;
 
         // Resize the tab to match the tab view
         wh::set_window_size(current_handle, width, height, false);
 
         // Move the tab under the headers
-        wh::set_window_position(current_handle, 5, 25);
+        wh::set_window_position(current_handle, 0, 0);
 
         // Make the current tab visible
         if index == 1 {
@@ -744,7 +741,7 @@ unsafe extern "system" fn resize_direct_children(handle: HWND, params: LPARAM) -
     let params: &ResizeDirectChildrenParams = &*(params as *const ResizeDirectChildrenParams);
     if wh::get_window_parent(handle) == params.parent {
         wh::set_window_size(handle, params.width, params.height, false);
-
+        println!("{} {}", params.width, params.height);
         let (x, _y) = wh::get_window_position(handle);
         wh::set_window_position(handle, x, params.tab_offset_y as i32);
     }
