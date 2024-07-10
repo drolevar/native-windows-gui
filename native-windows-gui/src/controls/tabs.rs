@@ -6,6 +6,7 @@ use crate::win32::{base_helper::{to_utf16, check_hwnd}, window_helper as wh};
 use crate::{NwgError, Font, RawEventHandler, unbind_raw_event_handler};
 use super::{ControlBase, ControlHandle};
 use std::{mem, cell::RefCell};
+use std::os::raw::c_void;
 
 #[cfg(feature="image-list")]
 use crate::ImageList;
@@ -90,10 +91,10 @@ impl TabsContainer {
         wh::send_message(handle, TCM_SETCURSEL, index as WPARAM, 0);
 
         // Update the visible state of the tabs (this is not done automatically)
-        let data: (HWND, i32) = (handle, index as i32);
-        let data_ptr = &data as *const (HWND, i32);
-        
         unsafe {
+            let mut data: (HWND, i32) = (handle, index as i32);
+            let data_ptr: *mut c_void = unsafe { mem::transmute(&mut data) };
+
             EnumChildWindows(handle, Some(toggle_children_tabs), data_ptr as LPARAM);
         }
     }
@@ -269,8 +270,8 @@ impl TabsContainer {
                     let nmhdr: &NMHDR = mem::transmute(l);
                     if nmhdr.code == TCN_SELCHANGE {
                         let index = SendMessageW(handle, TCM_GETCURSEL, 0, 0) as i32;
-                        let data: (HWND, i32) = (handle, index);
-                        let data_ptr = &data as *const (HWND, i32);
+                        let mut data: (HWND, i32) = (handle, index);
+                        let data_ptr: *mut c_void = unsafe { mem::transmute(&mut data) };
                         EnumChildWindows(handle, Some(toggle_children_tabs), data_ptr as LPARAM);
                     }
                 },
@@ -313,9 +314,9 @@ impl TabsContainer {
                     }
 
                     data.tab_offset_y = tab_height;
-                    
-                    let data_ptr = &data as *const ResizeDirectChildrenParams;
-                    EnumChildWindows(hwnd, Some(resize_direct_children), mem::transmute(data_ptr));
+
+                    let data_ptr: *mut c_void = unsafe { mem::transmute(&mut data) };
+                    EnumChildWindows(hwnd, Some(resize_direct_children), data_ptr as LPARAM);
                 },
                 _ => {}
             }
@@ -606,10 +607,9 @@ impl Tab {
 
     fn next_index(tab_view_handle: HWND) -> usize {
         let mut count = 0;
-        let count_ptr = &mut count as *mut usize;
-
+        let count_ptr: *mut c_void = unsafe { mem::transmute(&mut count) };
         unsafe {
-            EnumChildWindows(tab_view_handle, Some(count_children), mem::transmute(count_ptr));
+            EnumChildWindows(tab_view_handle, Some(count_children), count_ptr as LPARAM);
         }
 
         count
@@ -754,7 +754,7 @@ unsafe extern "system" fn count_children(handle: HWND, params: LPARAM) -> BOOL {
 
     if &wh::get_window_class_name(handle) == "NWG_TAB" {
         let tab_index = (wh::get_window_long(handle, GWL_USERDATA)) as WPARAM;
-        let count: &mut usize = ::std::mem::transmute(params);
+        let count: &mut usize = ::std::mem::transmute(params as *mut c_void);
         *count = usize::max(tab_index+1, *count);
     }
     
@@ -764,8 +764,7 @@ unsafe extern "system" fn count_children(handle: HWND, params: LPARAM) -> BOOL {
 /// Toggle the visibility of the active and inactive tab.
 unsafe extern "system" fn toggle_children_tabs(handle: HWND, params: LPARAM) -> BOOL {
     use winapi::um::winuser::GWL_USERDATA;
-    
-    let &(parent, index): &(HWND, i32) = mem::transmute(params);
+    let &(parent, index): &(HWND, i32) = mem::transmute(params as *mut c_void);
     if wh::get_window_parent(handle) == parent {
         let tab_index = wh::get_window_long(handle, GWL_USERDATA) as i32;
         let visible = tab_index == index + 1;
