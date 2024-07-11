@@ -93,7 +93,7 @@ impl TabsContainer {
         // Update the visible state of the tabs (this is not done automatically)
         unsafe {
             let mut data: (HWND, i32) = (handle, index as i32);
-            let data_ptr: *mut c_void = unsafe { mem::transmute(&mut data) };
+            let data_ptr: *mut c_void = mem::transmute(&mut data);
 
             EnumChildWindows(handle, Some(toggle_children_tabs), data_ptr as LPARAM);
         }
@@ -271,7 +271,7 @@ impl TabsContainer {
                     if nmhdr.code == TCN_SELCHANGE {
                         let index = SendMessageW(handle, TCM_GETCURSEL, 0, 0) as i32;
                         let mut data: (HWND, i32) = (handle, index);
-                        let data_ptr: *mut c_void = unsafe { mem::transmute(&mut data) };
+                        let data_ptr: *mut c_void = mem::transmute(&mut data);
                         EnumChildWindows(handle, Some(toggle_children_tabs), data_ptr as LPARAM);
                     }
                 },
@@ -284,9 +284,7 @@ impl TabsContainer {
         let handler1 = bind_raw_event_handler_inner(&self.handle, handle as usize, move |hwnd, msg, _w, l| { unsafe {
             match msg {
                 WM_SIZE => {
-                    use winapi::shared::windef::{RECT, HGDIOBJ};
-                    use winapi::um::winuser::{GetDC, DrawTextW, ReleaseDC, DT_CALCRECT, DT_LEFT};
-                    use winapi::um::wingdi::SelectObject;
+                    use winapi::shared::windef::{RECT};
 
                     let size = l as u32;
                     let width = LOWORD(size) as i32;
@@ -315,7 +313,7 @@ impl TabsContainer {
 
                     data.tab_offset_y = tab_height;
 
-                    let data_ptr: *mut c_void = unsafe { mem::transmute(&mut data) };
+                    let data_ptr: *mut c_void = mem::transmute(&mut data);
                     EnumChildWindows(hwnd, Some(resize_direct_children), data_ptr as LPARAM);
                 },
                 _ => {}
@@ -741,7 +739,7 @@ unsafe extern "system" fn resize_direct_children(handle: HWND, params: LPARAM) -
     let params: &ResizeDirectChildrenParams = &*(params as *const ResizeDirectChildrenParams);
     if wh::get_window_parent(handle) == params.parent {
         wh::set_window_size(handle, params.width, params.height, false);
-        println!("{} {}", params.width, params.height);
+        //println!("{} {}", params.width, params.height);
         let (x, _y) = wh::get_window_position(handle);
         wh::set_window_position(handle, x, params.tab_offset_y as i32);
     }
