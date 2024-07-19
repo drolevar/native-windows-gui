@@ -295,6 +295,7 @@ impl TabsContainer {
                         parent: hwnd,
                         width: w as u32,
                         height: h as u32,
+                        tab_offset_x: 0,
                         tab_offset_y: 0
                     };
 
@@ -311,7 +312,13 @@ impl TabsContainer {
                         data.height -= tab_height.min(data.height);
                     }
 
+                    data.width -= 4;
+                    data.height -= 1;
+
                     data.tab_offset_y = tab_height;
+
+                    data.tab_offset_x = 1; // to not draw the child on top of the border
+                    data.tab_offset_y -= 1; // 1 pixel offset?
 
                     let data_ptr: *mut c_void = mem::transmute(&mut data);
                     EnumChildWindows(hwnd, Some(resize_direct_children), data_ptr as LPARAM);
@@ -732,7 +739,8 @@ struct ResizeDirectChildrenParams {
     parent: HWND,
     width: u32,
     height: u32,
-    tab_offset_y: u32
+    tab_offset_y: u32,
+    tab_offset_x: u32,
 }
 
 unsafe extern "system" fn resize_direct_children(handle: HWND, params: LPARAM) -> BOOL {
@@ -741,7 +749,7 @@ unsafe extern "system" fn resize_direct_children(handle: HWND, params: LPARAM) -
         wh::set_window_size(handle, params.width, params.height, false);
         //println!("{} {}", params.width, params.height);
         let (x, _y) = wh::get_window_position(handle);
-        wh::set_window_position(handle, x, params.tab_offset_y as i32);
+        wh::set_window_position(handle, params.tab_offset_x as i32, params.tab_offset_y as i32);
     }
 
     1
