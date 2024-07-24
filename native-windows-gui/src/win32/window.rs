@@ -18,7 +18,6 @@ use std::rc::Rc;
 use std::ffi::OsString;
 use std::os::windows::prelude::OsStringExt;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
-use std::os::raw::c_void;
 
 
 static TIMER_ID: AtomicU32 = AtomicU32::new(1); 
@@ -599,17 +598,13 @@ unsafe extern "system" fn process_events(hwnd: HWND, msg: UINT, w: WPARAM, l: LP
         },
         WM_NOTIFY => {
             let code = {
-                let notif_ptr: *mut NMHDR = mem::transmute(l.clone());
+                let notif_ptr: *mut NMHDR = mem::transmute(l);
                 (&*notif_ptr).code
             };
-
+        
             match code {
-                TTN_GETDISPINFOW => {
-                    handle_tooltip_callback(mem::transmute::<_, *mut NMTTDISPINFOW>(l), callback)
-                },
-                _ => {
-                    handle_default_notify_callback(l, callback)
-                }
+                TTN_GETDISPINFOW => handle_tooltip_callback(mem::transmute::<_, *mut NMTTDISPINFOW>(l), callback),
+                _ => handle_default_notify_callback(mem::transmute::<_, *const NMHDR>(l), callback)
             }
         },
         WM_MENUCOMMAND => {
@@ -1033,11 +1028,9 @@ unsafe fn handle_tooltip_callback<'a>(notif: *mut NMTTDISPINFOW, callback: &Call
     callback(Event::OnTooltipText, data, handle);
 }
 
-unsafe fn handle_default_notify_callback(notif_ptr: LPARAM, callback: &Callback){
+unsafe fn handle_default_notify_callback<'a>(notif_raw: *const NMHDR, callback: &Callback){
     use winapi::um::winnt::WCHAR;
     use winapi::um::winuser::GetClassNameW;
-
-    let notif_raw : *mut NMHDR = <*mut c_void>::cast(notif_ptr as *mut c_void);
 
     let notif = &*notif_raw;
     let handle = ControlHandle::Hwnd(notif.hwndFrom);
@@ -1047,6 +1040,7 @@ unsafe fn handle_default_notify_callback(notif_ptr: LPARAM, callback: &Callback)
     let class_name = OsString::from_wide(&class_name_raw[..count]).into_string().unwrap_or("".to_string());
 
     let code = notif.code;
+
     match &class_name as &str {
         "SysDateTimePick32" => callback(datetimepick_commands(code), NO_DATA, handle),
         "SysTabControl32" => callback(tabs_commands(code), NO_DATA, handle),
