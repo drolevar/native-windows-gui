@@ -597,14 +597,17 @@ unsafe extern "system" fn process_events(hwnd: HWND, msg: UINT, w: WPARAM, l: LP
             callback(evt, data, base_handle);
         },
         WM_NOTIFY => {
-            let code = {
-                let notif_ptr: *mut NMHDR = mem::transmute(l);
-                (&*notif_ptr).code
-            };
+            let notif_ptr = l as *const NMHDR;
+            let code = (&*notif_ptr).code;
         
             match code {
-                TTN_GETDISPINFOW => handle_tooltip_callback(mem::transmute::<_, *mut NMTTDISPINFOW>(l), callback),
-                _ => handle_default_notify_callback(mem::transmute::<_, *const NMHDR>(l), callback)
+                TTN_GETDISPINFOW => {
+                    let notif_ptr = l as *mut NMTTDISPINFOW;
+                    handle_tooltip_callback(notif_ptr, callback)
+                },
+                _ => {
+                    handle_default_notify_callback(notif_ptr, callback)
+                }
             }
         },
         WM_MENUCOMMAND => {
@@ -1067,6 +1070,7 @@ unsafe fn is_textbox_control(hwnd: HWND) -> bool {
 //
 
 #[cfg(target_env="gnu")] use std::{sync::Mutex, collections::HashMap};
+use std::os::raw::c_void;
 
 #[cfg(target_env="gnu")]
 type SubclassId = (usize, usize, UINT_PTR);
