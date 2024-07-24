@@ -1,11 +1,14 @@
+use std::cell::RefCell;
 use winapi::shared::minwindef::{WPARAM, LPARAM};
 use winapi::um::winuser::{WS_VSCROLL, WS_HSCROLL, ES_AUTOVSCROLL, ES_AUTOHSCROLL, WS_VISIBLE, WS_DISABLED, WS_TABSTOP};
 use winapi::um::winuser::LockWindowUpdate;
 use crate::win32::window_helper as wh;
-use crate::{Font, NwgError};
+use crate::{Font, NwgError, RawEventHandler, unbind_raw_event_handler};
 use super::{ControlBase, ControlHandle};
 use std::ops::Range;
 use newline_converter::{dos2unix, unix2dos};
+use winapi::um::wingdi::DeleteObject;
+use winapi::shared::windef::HBRUSH;
 
 const NOT_BOUND: &'static str = "TextBox is not yet bound to a winapi object";
 const BAD_HANDLE: &'static str = "INTERNAL ERROR: TextBox handle is not HWND!";
@@ -75,9 +78,11 @@ fn build_box(tbox: &mut nwg::TextBox, window: &nwg::Window, font: &nwg::Font) {
 }
 ```
 */
-#[derive(Default, PartialEq, Eq)]
+#[derive(Default)]
 pub struct TextBox {
-    pub handle: ControlHandle
+    pub handle: ControlHandle,
+    background_brush: Option<HBRUSH>,
+    handler0: RefCell<Option<RawEventHandler>>,
 }
 
 impl TextBox {
@@ -87,6 +92,7 @@ impl TextBox {
             text: "",
             size: (100, 25),
             position: (0, 0),
+            background_color: None,
             flags: None,
             ex_flags: 0,
             limit: 0,
@@ -388,10 +394,60 @@ impl TextBox {
         WS_BORDER | WS_CHILD | ES_MULTILINE | ES_WANTRETURN
     }
 
+    fn hook_non_client_size(&mut self, bg: Option<[u8; 3]>) {
+        use crate::bind_raw_event_handler_inner;
+        use winapi::shared::windef::{HWND};
+        use winapi::shared::{basetsd::UINT_PTR, minwindef::LRESULT};
+        use winapi::um::winuser::{WM_CTLCOLORSTATIC, COLOR_WINDOW};
+        use winapi::um::wingdi::{CreateSolidBrush, RGB};
+
+        if self.handle.blank() { panic!("{}", NOT_BOUND); }
+        let handle = self.handle.hwnd().expect(BAD_HANDLE);
+
+        let parent_handle = ControlHandle::Hwnd(wh::get_window_parent(handle));
+
+        let brush = match bg {
+            Some(c) => {
+                let b = unsafe { CreateSolidBrush(RGB(c[0], c[1], c[2])) };
+                self.background_brush = Some(b);
+                b
+            },
+            None => COLOR_WINDOW as HBRUSH
+        };
+
+
+        if bg.is_some() {
+            let handler0 = bind_raw_event_handler_inner(&parent_handle, handle as UINT_PTR, move |_hwnd, msg, _w, l| {
+                match msg {
+                    WM_CTLCOLORSTATIC => {
+                        let child = l as HWND;
+                        if child == handle {
+                            return Some(brush as LRESULT);
+                        }
+                    },
+                    _ => {}
+                }
+
+                None
+            });
+
+            *self.handler0.borrow_mut() = Some(handler0.unwrap());
+        }
+    }
+
 }
 
 impl Drop for TextBox {
     fn drop(&mut self) {
+        let handler = self.handler0.borrow();
+        if let Some(h) = handler.as_ref() {
+            drop(unbind_raw_event_handler(h));
+        }
+
+        if let Some(bg) = self.background_brush {
+            unsafe { DeleteObject(bg as _); }
+        }
+
         self.handle.destroy();
     }
 }
@@ -399,6 +455,7 @@ pub struct TextBoxBuilder<'a> {
     text: &'a str,
     size: (i32, i32),
     position: (i32, i32),
+    background_color: Option<[u8; 3]>,
     flags: Option<TextBoxFlags>,
     ex_flags: u32,
     limit: usize,
@@ -455,6 +512,11 @@ impl<'a> TextBoxBuilder<'a> {
         self
     }
 
+    pub fn background_color(mut self, color: Option<[u8;3]>) -> TextBoxBuilder<'a> {
+        self.background_color = color;
+        self
+    }
+
     pub fn parent<C: Into<ControlHandle>>(mut self, p: C) -> TextBoxBuilder<'a> {
         self.parent = Some(p.into());
         self
@@ -498,6 +560,8 @@ impl<'a> TextBoxBuilder<'a> {
         } else {
             out.set_font(Font::global_default().as_ref());
         }
+
+        out.hook_non_client_size(self.background_color);
 
         Ok(())
     }
