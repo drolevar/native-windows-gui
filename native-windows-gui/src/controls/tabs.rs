@@ -748,7 +748,7 @@ unsafe extern "system" fn resize_direct_children(handle: HWND, params: LPARAM) -
     if wh::get_window_parent(handle) == params.parent {
         wh::set_window_size(handle, params.width, params.height, false);
         //println!("{} {}", params.width, params.height);
-        let (x, _y) = wh::get_window_position(handle);
+        let (_x, _y) = wh::get_window_position(handle);
         wh::set_window_position(handle, params.tab_offset_x as i32, params.tab_offset_y as i32);
     }
 
