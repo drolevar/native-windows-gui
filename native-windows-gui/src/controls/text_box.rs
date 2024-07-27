@@ -7,7 +7,7 @@ use crate::{Font, NwgError, RawEventHandler, unbind_raw_event_handler};
 use super::{ControlBase, ControlHandle};
 use std::ops::Range;
 use newline_converter::{dos2unix, unix2dos};
-use winapi::um::wingdi::DeleteObject;
+use winapi::um::wingdi::{DeleteObject, SetBkMode, SetTextColor, TRANSPARENT};
 use winapi::shared::windef::HBRUSH;
 
 const NOT_BOUND: &'static str = "TextBox is not yet bound to a winapi object";
@@ -92,6 +92,7 @@ impl TextBox {
             text: "",
             size: (100, 25),
             position: (0, 0),
+            text_color: None,
             background_color: None,
             flags: None,
             ex_flags: 0,
@@ -394,19 +395,20 @@ impl TextBox {
         WS_BORDER | WS_CHILD | ES_MULTILINE | ES_WANTRETURN
     }
 
-    fn hook_non_client_size(&mut self, bg: Option<[u8; 3]>) {
+    fn hook_non_client_size(&mut self, fg: Option<[u8; 3]>, bg: Option<[u8; 3]>) {
         use crate::bind_raw_event_handler_inner;
         use winapi::shared::windef::{HWND};
         use winapi::shared::{basetsd::UINT_PTR, minwindef::LRESULT};
         use winapi::um::winuser::{WM_CTLCOLORSTATIC, COLOR_WINDOW};
         use winapi::um::wingdi::{CreateSolidBrush, RGB};
+        use winapi::shared::windef::HDC;
 
         if self.handle.blank() { panic!("{}", NOT_BOUND); }
         let handle = self.handle.hwnd().expect(BAD_HANDLE);
 
         let parent_handle = ControlHandle::Hwnd(wh::get_window_parent(handle));
 
-        let brush = match bg {
+        let bg_brush = match bg {
             Some(c) => {
                 let b = unsafe { CreateSolidBrush(RGB(c[0], c[1], c[2])) };
                 self.background_brush = Some(b);
@@ -415,14 +417,23 @@ impl TextBox {
             None => COLOR_WINDOW as HBRUSH
         };
 
-
         if bg.is_some() {
             let handler0 = bind_raw_event_handler_inner(&parent_handle, handle as UINT_PTR, move |_hwnd, msg, _w, l| {
                 match msg {
                     WM_CTLCOLORSTATIC => {
                         let child = l as HWND;
+                        let hdc = _w as HDC;
+                        unsafe {
+                            if let Some(c) = fg {
+                                SetTextColor(hdc, RGB(c[0], c[1], c[2]));
+                            }
+
+                            if let Some(c) = bg {
+                                SetBkMode(hdc, TRANSPARENT as _);
+                            }
+                        };
                         if child == handle {
-                            return Some(brush as LRESULT);
+                            return Some(bg_brush as LRESULT);
                         }
                     },
                     _ => {}
@@ -455,6 +466,7 @@ pub struct TextBoxBuilder<'a> {
     text: &'a str,
     size: (i32, i32),
     position: (i32, i32),
+    text_color: Option<[u8; 3]>,
     background_color: Option<[u8; 3]>,
     flags: Option<TextBoxFlags>,
     ex_flags: u32,
@@ -517,6 +529,11 @@ impl<'a> TextBoxBuilder<'a> {
         self
     }
 
+    pub fn text_color(mut self, color: Option<[u8;3]>) -> TextBoxBuilder<'a> {
+        self.text_color = color;
+        self
+    }
+
     pub fn parent<C: Into<ControlHandle>>(mut self, p: C) -> TextBoxBuilder<'a> {
         self.parent = Some(p.into());
         self
@@ -561,7 +578,7 @@ impl<'a> TextBoxBuilder<'a> {
             out.set_font(Font::global_default().as_ref());
         }
 
-        out.hook_non_client_size(self.background_color);
+        out.hook_non_client_size(self.text_color, self.background_color);
 
         Ok(())
     }

@@ -13,6 +13,9 @@ use super::{ControlBase, ControlHandle};
 use std::cell::RefCell;
 use std::ops::Range;
 use std::char;
+use winapi::shared::minwindef::LRESULT;
+use winapi::um::wingdi::{OPAQUE, SetBkColor, SetBkMode, SetTextColor, TRANSPARENT};
+use winapi::um::winuser::{WM_CTLCOLORSTATIC, WM_CTLCOLOREDIT};
 
 const NOT_BOUND: &'static str = "TextInput is not yet bound to a winapi object";
 const BAD_HANDLE: &'static str = "INTERNAL ERROR: TextInput handle is not HWND!";
@@ -57,7 +60,7 @@ TextInput is not behind any features.
   * `readonly`:         If the text input should allow user input or not
   * `password`:         The password character. If set to None, the textinput is a regular control.
   * `align`:            The alignment of the text in the text input
-  * `background_color`: The color of the textinput top and bottom padding. This is not the white background under the text.
+  * `background_padding_color`: The color of the textinput top and bottom padding. This is not the white background under the text.
   * `focus`:            The control receive focus after being created
 
 **Control events:**
@@ -81,6 +84,8 @@ fn build_box(tbox: &mut nwg::TextInput, window: &nwg::Window, font: &nwg::Font) 
 pub struct TextInput {
     pub handle: ControlHandle,
     background_brush: Option<HBRUSH>,
+    background_padding_brush: Option<HBRUSH>,
+    handler_parent: RefCell<Option<RawEventHandler>>,
     handler0: RefCell<Option<RawEventHandler>>,
 }
 
@@ -101,7 +106,9 @@ impl TextInput {
             focus: false,
             font: None,
             parent: None,
+            text_color: None,
             background_color: None,
+            background_padding_color: None,
         }
     }
 
@@ -355,30 +362,66 @@ impl TextInput {
     }
 
     /// Center the text vertically. Can't believe that must be manually hacked in.
-    fn hook_non_client_size(&mut self, bg: Option<[u8; 3]>) {
+    fn hook_non_client_size(&mut self, text_color: Option<[u8; 3]>, background_color: Option<[u8; 3]>, padding_color: Option<[u8; 3]>) {
         use crate::bind_raw_event_handler_inner;
         use winapi::shared::windef::{HGDIOBJ, RECT, POINT};
         use winapi::um::winuser::{WM_NCCALCSIZE, WM_NCPAINT, WM_SIZE, DT_CALCRECT, DT_LEFT, NCCALCSIZE_PARAMS, COLOR_WINDOW,};
         use winapi::um::winuser::{SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOMOVE, SWP_FRAMECHANGED};
         use winapi::um::winuser::{GetDC, DrawTextW, ReleaseDC, GetClientRect, GetWindowRect, FillRect, ScreenToClient, SetWindowPos};
         use winapi::um::wingdi::{SelectObject, CreateSolidBrush, RGB};
+        use winapi::shared::windef::HWND;
+        use winapi::shared::windef::HDC;
+        use winapi::shared::{basetsd::UINT_PTR, minwindef::LRESULT};
         use std::{mem, ptr};
 
         if self.handle.blank() { panic!("{}", NOT_BOUND); }
         self.handle.hwnd().expect(BAD_HANDLE);
 
-        let brush = match bg {
+        let brush = match padding_color {
             Some(c) => {
                 let b = unsafe { CreateSolidBrush(RGB(c[0], c[1], c[2])) };
-                self.background_brush = Some(b);
+                self.background_padding_brush = Some(b);
                 b
             },
             None => COLOR_WINDOW as HBRUSH
         };
 
+        let handle = self.handle.hwnd().expect(BAD_HANDLE);
+        let parent_handle = ControlHandle::Hwnd(wh::get_window_parent(handle));
+
         unsafe {
 
-        let handler = bind_raw_event_handler_inner(&self.handle, 0, move |hwnd, msg, w, l| {
+        if padding_color.is_some() { // TODO: fix
+            let handler_parent = bind_raw_event_handler_inner(&parent_handle, handle as UINT_PTR, move |_hwnd, msg, _w, l| {
+                match msg {
+                    WM_CTLCOLOREDIT | WM_CTLCOLORSTATIC => {
+                        let child = l as HWND;
+                        let hdc = _w as HDC;
+                        unsafe {
+                            if let Some(c) = text_color {
+                                SetTextColor(hdc, RGB(c[0], c[1], c[2]));
+                            }
+
+                            if let Some(c) = background_color {
+                                SetTextColor(hdc, RGB(255, 255, 255));
+                                SetBkColor(hdc, RGB(c[0], c[1], c[2]));
+                                SetBkMode(hdc, OPAQUE as _);
+                            }
+                        };
+                        if child == handle {
+                            return Some(brush as LRESULT);
+                        }
+                    },
+                    _ => {}
+                }
+
+                None
+            });
+
+            *self.handler_parent.borrow_mut() = Some(handler_parent.unwrap());
+        }
+
+        let handler = bind_raw_event_handler_inner(&self.handle, handle as UINT_PTR, move |hwnd, msg, w, l| {
             match msg {
                 WM_NCCALCSIZE  => {
                     if w == 0 { return None }
@@ -387,7 +430,7 @@ impl TextInput {
                     let font_handle = wh::get_window_font(hwnd);
                     let mut r: RECT = mem::zeroed();
                     let dc = GetDC(hwnd);
-                    
+
                     let old = SelectObject(dc, font_handle as HGDIOBJ);
                     let calc: [u16;2] = [75, 121];
                     DrawTextW(dc, calc.as_ptr(), 2, &mut r, DT_CALCRECT | DT_LEFT);
@@ -405,7 +448,7 @@ impl TextInput {
 
                     let window_height = window.bottom - window.top;
                     let center = ((window_height - client_height) / 2) - 4;
-                    
+
                     // Save the info
                     let info_ptr: *mut NCCALCSIZE_PARAMS = l as *mut NCCALCSIZE_PARAMS;
                     let info = &mut *info_ptr;
@@ -463,13 +506,22 @@ impl TextInput {
 impl Drop for TextInput {
     fn drop(&mut self) {
         use crate::unbind_raw_event_handler;
-        
+
+        let handler_parent = self.handler_parent.borrow();
+        if let Some(h) = handler_parent.as_ref() {
+            drop(unbind_raw_event_handler(h));
+        }
+
         let handler = self.handler0.borrow();
         if let Some(h) = handler.as_ref() {
             drop(unbind_raw_event_handler(h));
         }
-        
+
         if let Some(bg) = self.background_brush {
+            unsafe { DeleteObject(bg as _); }
+        }
+
+        if let Some(bg) = self.background_padding_brush {
             unsafe { DeleteObject(bg as _); }
         }
         
@@ -490,7 +542,9 @@ pub struct TextInputBuilder<'a> {
     readonly: bool,
     font: Option<&'a Font>,
     parent: Option<ControlHandle>,
+    text_color: Option<[u8; 3]>,
     background_color: Option<[u8; 3]>,
+    background_padding_color: Option<[u8; 3]>,
     focus: bool,
 }
 
@@ -551,8 +605,18 @@ impl<'a> TextInputBuilder<'a> {
         self
     }
 
+    pub fn text_color(mut self, color: Option<[u8;3]>) -> TextInputBuilder<'a> {
+        self.text_color = color;
+        self
+    }
+
     pub fn background_color(mut self, color: Option<[u8;3]>) -> TextInputBuilder<'a> {
         self.background_color = color;
+        self
+    }
+
+    pub fn background_padding_color(mut self, color: Option<[u8;3]>) -> TextInputBuilder<'a> {
+        self.background_padding_color = color;
         self
     }
 
@@ -596,7 +660,7 @@ impl<'a> TextInputBuilder<'a> {
             .parent(Some(parent))
             .build()?;
 
-        out.hook_non_client_size(self.background_color);
+        out.hook_non_client_size(self.text_color, self.background_color, self.background_padding_color);
 
         if self.limit > 0 {
             out.set_limit(self.limit);
