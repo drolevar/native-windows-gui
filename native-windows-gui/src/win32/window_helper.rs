@@ -2,7 +2,7 @@ use super::base_helper::{to_utf16, from_utf16};
 use super::high_dpi;
 use winapi::shared::windef::{HFONT, HWND, HMENU};
 use winapi::shared::minwindef::{UINT, WPARAM, LPARAM, LRESULT};
-use winapi::um::winuser::{GetWindowTextLengthW, WM_USER};
+use winapi::um::winuser::{HDWP, GetWindowTextLengthW, WM_USER};
 use winapi::ctypes::c_int;
 use std::{ptr, mem};
 
@@ -476,7 +476,7 @@ impl DeferredWindowPositioner {
 
     /// Defers a window positioning
     pub fn defer_pos(
-        &mut self, 
+        &mut self,
         hwnd: HWND,
         hwnd_insertafter: HWND,
         x: i32,
@@ -486,9 +486,14 @@ impl DeferredWindowPositioner {
     ) -> Result<(), &'static str> {
         use ::winapi::um::winuser::DeferWindowPos;
 
-        let handle = unsafe {
-            DeferWindowPos(self.handle, hwnd, hwnd_insertafter, x, y, cx, cy, 0)
-        };
+        let handle : HDWP;
+
+        unsafe {
+            let (x, y) = high_dpi::logical_to_physical(x, y);
+            let (cx, cy) = high_dpi::logical_to_physical(cx, cy);
+
+            handle = DeferWindowPos(self.handle, hwnd, hwnd_insertafter, x, y, cx, cy, 0);
+        }
 
         self.handle = handle;
 
